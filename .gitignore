@@ -1,0 +1,50 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ─── SECURITY: Environment & Secrets ───
+.env
+.env.*
+**/.env
+**/.env.*
+server/.env
+keystore.json
+account.json
+
+# ─── Database (local SQLite) ───
+*.db
+*.sqlite
+*.sqlite3
+server/*.db
+
+# ─── Cairo build artifacts ───
+target/
+contracts/target/
+
+# ─── Starkli binary + extracted files ───
+starkli.exe
+*.tar.gz
+
+# ─── OS Files ───
+Thumbs.db

@@ -1,0 +1,19 @@
+[package]
+name = "starkfund_escrow"
+version = "0.1.0"
+edition = "2024_07"
+cairo-version = "2.16.1"
+
+[dependencies]
+starknet = "2.16.1"
+openzeppelin = { git = "https://github.com/OpenZeppelin/cairo-contracts.git", tag = "v1.0.0" }
+
+[[target.starknet-contract]]
+sierra = true
+casm = true
+
+# ─────────────────────────────────────────────
+# Build:   cd contracts && scarb build
+# Declare: starkli declare target/dev/starkfund_escrow_StarkFundEscrow.contract_class.json
+# Deploy:  starkli deploy <CLASS_HASH> <PLATFORM_WALLET> <FEE_BPS>
+# ─────────────────────────────────────────────
