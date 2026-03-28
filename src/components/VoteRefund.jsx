@@ -66,12 +66,13 @@ export default function VoteRefund({ campaign }) {
   // Show refund tx if already refunded
   const existingTx = c.refund_tx_hash || c.refund_tx;
 
-  // Vote counts — prefer server data, fall back to campaign data
+  // Vote counts — use server vote count but ALWAYS compute threshold locally
   const votes = voteData?.voteCount ?? c.voteCount ?? c.refund_votes ?? 0;
-  const backerCount = voteData?.backerCount ?? c.backerCount ?? c.backers.length;
-  const threshold = voteData?.votesNeeded ?? c.votesNeeded ?? Math.floor(backerCount / 2) + 1;
+  const backerCount = c.backers.length; // always use actual backer array length
+  // >50% means: 1 backer needs 1 vote, 2 need 2, 3 need 2, 4 need 3, etc.
+  const threshold = Math.floor(backerCount / 2) + 1;
   const pct = backerCount > 0 ? Math.round((votes / backerCount) * 100) : 0;
-  const thresholdMet = voteData?.passed || votes >= threshold;
+  const thresholdMet = votes >= threshold;
 
   // ── Handle vote — sends 0.001 STRK proof tx + records on server ──
   const handleVote = async () => {
@@ -79,23 +80,18 @@ export default function VoteRefund({ campaign }) {
     setVoting(true);
 
     try {
-      // voteRefund() in useWallet:
-      // 1. Sends 0.001 STRK to platform wallet (on-chain proof)
-      // 2. Records vote in server (UNIQUE constraint prevents double vote)
-      // 3. Returns { txHash, votesFor, votesNeeded, refundTriggered }
       const result = await voteRefund(c.id);
 
       if (result) {
         setHasVoted(true);
-        setLastTxHash(result.txHash); // triggers re-fetch of vote status
+        setLastTxHash(result.txHash);
 
-        if (result.refundTriggered) {
+        if (result.refundTriggered || votes + 1 >= threshold) {
           // Vote threshold crossed — trigger batch refund
           await executeRefund();
         }
       }
     } catch (err) {
-      // Check if it's a "already voted" error from server
       if (err?.message?.includes("already voted") || err?.message?.includes("UNIQUE")) {
         setHasVoted(true);
         toast("You already voted!", { icon: "🗳️" });
@@ -113,7 +109,6 @@ export default function VoteRefund({ campaign }) {
     setRefunding(true);
 
     try {
-      // Build recipient list — handle both server and local field names
       const recipients = c.backers
         .filter((b) => backerAddr(b) && (b.amount > 0) && !b.refunded)
         .map((b) => ({
@@ -127,14 +122,12 @@ export default function VoteRefund({ campaign }) {
         return;
       }
 
-      // Execute real batch refund on Starknet
       const tx = await batchRefund(recipients);
       const hash = tx.hash || tx.transaction_hash || "";
       const explorerUrl = tx.explorerUrl || getExplorerUrl(hash);
 
       setRefundTx({ hash, explorerUrl });
 
-      // Mark campaign as refunded with tx hash
       setCampaigns(
         campaigns.map((camp) =>
           camp.id === c.id
@@ -149,7 +142,6 @@ export default function VoteRefund({ campaign }) {
         )
       );
 
-      // Mark in backend
       try {
         if (markRefunded) await markRefunded(c.id);
       } catch (e) {

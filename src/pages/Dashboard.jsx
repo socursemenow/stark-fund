@@ -10,6 +10,8 @@ const STRK_PRICE = 0.42;
 const backerAddr = (b) => b.backer_address || b.address || "";
 // Helper: get date from backer (server=created_at, local=date)
 const backerDate = (b) => b.created_at || b.date || "";
+// Helper: get tx hash from backer (handles all field name variants)
+const backerTxHash = (b) => b.tx_hash || b.txHash || b.transaction_hash || "";
 
 function daysLeft(d) {
   return Math.max(0, Math.ceil((new Date(d) - new Date()) / 86400000));
@@ -123,7 +125,6 @@ export default function Dashboard({ user }) {
   const successRate = campaigns.length > 0 ? Math.round((funded.length / campaigns.length) * 100) : 0;
 
   // All contributions + refund events flattened
-  // FIXED: reads backer_address OR address, created_at OR date
   const allActivity = [
     // Contributions
     ...campaigns.flatMap((c) =>
@@ -131,6 +132,7 @@ export default function Dashboard({ user }) {
         ...b,
         address: backerAddr(b),
         date: backerDate(b),
+        tx_hash: backerTxHash(b),
         type: "fund",
         campaignTitle: c.title,
         campaignId: c.id,
@@ -333,57 +335,75 @@ export default function Dashboard({ user }) {
               <p>No activity yet. Contributions will appear here.</p>
             </div>
           ) : (
-            allActivity.slice(0, 30).map((b, i) => (
-              <div
-                key={i}
-                onClick={() => navigate(`/campaign/${b.campaignId}`)}
-                style={{
-                  display: "flex", justifyContent: "space-between", alignItems: "center",
-                  padding: "12px 16px", borderRadius: 12, cursor: "pointer",
-                  background: "rgba(20,16,28,0.5)", border: "1px solid rgba(255,255,255,0.04)",
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: 13, color: "#e8e4ef", fontWeight: 600 }}>
-                    {b.type === "refund" ? (
-                      <>
-                        <span style={{ color: "#ef4444" }}>💸 Refund</span>
-                        {" on "}
-                        <span style={{ color: "#f97316" }}>{b.campaignTitle}</span>
-                        <span style={{ color: "#8a8498", fontSize: 12 }}> ({b.backerCount} backers)</span>
-                      </>
-                    ) : (
-                      <>
-                        <span style={{ color: "#8a8498", fontFamily: "monospace", fontSize: 12 }}>
-                          {(b.address || "").slice(0, 8)}...
-                        </span>
-                        {" backed "}
-                        <span style={{ color: "#f97316" }}>{b.campaignTitle}</span>
-                      </>
-                    )}
+            allActivity.slice(0, 30).map((b, i) => {
+              const txHash = b.tx_hash || "";
+              return (
+                <div
+                  key={i}
+                  style={{
+                    padding: "12px 16px", borderRadius: 12,
+                    background: "rgba(20,16,28,0.5)", border: "1px solid rgba(255,255,255,0.04)",
+                  }}
+                >
+                  {/* Top row: info + amount */}
+                  <div
+                    onClick={() => navigate(`/campaign/${b.campaignId}`)}
+                    style={{
+                      display: "flex", justifyContent: "space-between", alignItems: "center",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: 13, color: "#e8e4ef", fontWeight: 600 }}>
+                        {b.type === "refund" ? (
+                          <>
+                            <span style={{ color: "#ef4444" }}>💸 Refund</span>
+                            {" on "}
+                            <span style={{ color: "#f97316" }}>{b.campaignTitle}</span>
+                            <span style={{ color: "#8a8498", fontSize: 12 }}> ({b.backerCount} backers)</span>
+                          </>
+                        ) : (
+                          <>
+                            <span style={{ color: "#8a8498", fontFamily: "monospace", fontSize: 12 }}>
+                              {(b.address || "").slice(0, 8)}...
+                            </span>
+                            {" backed "}
+                            <span style={{ color: "#f97316" }}>{b.campaignTitle}</span>
+                          </>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 11, color: "#5c5672", marginTop: 2 }}>
+                        {b.date ? new Date(b.date).toLocaleDateString() : ""}
+                      </div>
+                    </div>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: b.type === "refund" ? "#ef4444" : "#22c55e", flexShrink: 0 }}>
+                      {b.type === "refund" ? "-" : "+"}{b.amount} STRK
+                    </span>
                   </div>
-                  <div style={{ fontSize: 11, color: "#5c5672", marginTop: 2 }}>
-                    {b.date ? new Date(b.date).toLocaleDateString() : ""}
-                  </div>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: b.type === "refund" ? "#ef4444" : "#22c55e" }}>
-                    {b.type === "refund" ? "-" : "+"}{b.amount} STRK
-                  </span>
-                  {b.tx_hash && (
+
+                  {/* Transaction link — visible pill below the row */}
+                  {txHash && (
                     <a
-                      href={b.explorer_url || getExplorerUrl(b.tx_hash)}
+                      href={b.explorer_url || getExplorerUrl(txHash)}
                       target="_blank"
                       rel="noopener noreferrer"
                       onClick={(e) => e.stopPropagation()}
-                      style={{ fontSize: 11, color: "#5c5672", textDecoration: "none" }}
+                      style={{
+                        display: "inline-flex", alignItems: "center", gap: 5,
+                        marginTop: 8, padding: "4px 10px", borderRadius: 8,
+                        fontSize: 11, fontFamily: "monospace",
+                        background: b.type === "refund" ? "rgba(34,197,94,0.06)" : "rgba(249,115,22,0.06)",
+                        border: b.type === "refund" ? "1px solid rgba(34,197,94,0.12)" : "1px solid rgba(249,115,22,0.12)",
+                        color: b.type === "refund" ? "#22c55e" : "#f97316",
+                        textDecoration: "none",
+                      }}
                     >
-                      ↗
+                      🔗 tx: {txHash.slice(0, 12)}...{txHash.slice(-6)} · Voyager ↗
                     </a>
                   )}
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       )}

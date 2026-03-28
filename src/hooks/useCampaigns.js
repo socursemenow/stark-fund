@@ -1,19 +1,36 @@
 // ═══════════════════════════════════════════════════════════
 // src/hooks/useCampaigns.js — Real API + local fallback
+// FIXED: retries backend check if it previously failed
 // ═══════════════════════════════════════════════════════════
 
 import { create } from "zustand";
 import { api } from "../lib/api";
 
-// Check if backend is running
+// Check if backend is running — retries if previously failed
 let backendAvailable = null;
+let lastCheck = 0;
+const RETRY_INTERVAL = 30000; // retry every 30 seconds if failed
+
 async function checkBackend() {
-  if (backendAvailable !== null) return backendAvailable;
+  const now = Date.now();
+  // If previously succeeded, keep it
+  if (backendAvailable === true) return true;
+  // If previously failed, retry after interval
+  if (backendAvailable === false && (now - lastCheck) < RETRY_INTERVAL) return false;
+
+  lastCheck = now;
   try {
-    await fetch(`${import.meta.env.VITE_API_URL || ""}/api/health`);
-    backendAvailable = true;
+    const url = import.meta.env.VITE_API_URL || "";
+    const res = await fetch(`${url}/api/health`);
+    if (res.ok) {
+      backendAvailable = true;
+      console.log("[useCampaigns] Backend connected:", url);
+    } else {
+      backendAvailable = false;
+    }
   } catch {
     backendAvailable = false;
+    console.warn("[useCampaigns] Backend unavailable, using local state");
   }
   return backendAvailable;
 }
@@ -37,7 +54,6 @@ export const useCampaignStore = create((set, get) => ({
         const data = await api.getCampaigns();
         set({ campaigns: data, loading: false, initialized: true });
       } else {
-        // No backend — keep local state
         set({ loading: false, initialized: true });
       }
     } catch (err) {
@@ -55,7 +71,6 @@ export const useCampaignStore = create((set, get) => ({
       if (hasBackend) {
         created = await api.createCampaign(campaign);
       } else {
-        // Local fallback
         created = {
           ...campaign,
           id: `c_${Date.now()}`,
@@ -83,57 +98,60 @@ export const useCampaignStore = create((set, get) => ({
 
       if (hasBackend) {
         const updated = await api.recordContribution(campaignId, {
-          backer_address: contribution.address,
+          backer_address: contribution.address || contribution.backer_address,
           amount: contribution.amount,
           token_paid: contribution.token_paid || "STRK",
           amount_paid: contribution.amount_paid || contribution.amount,
           tx_hash: contribution.tx_hash || "",
         });
-        // Replace campaign in state with server response
+        // Replace campaign in state with server response (has updated raised + backers)
         set({
           campaigns: get().campaigns.map((c) =>
             c.id === campaignId ? updated : c
           ),
         });
+        return updated;
       } else {
         // Local update
+        const localContrib = {
+          backer_address: contribution.address || contribution.backer_address,
+          address: contribution.address || contribution.backer_address,
+          amount: contribution.amount,
+          tx_hash: contribution.tx_hash || "",
+          token_paid: contribution.token_paid || "STRK",
+          created_at: new Date().toISOString(),
+          date: new Date().toISOString(),
+        };
         set({
           campaigns: get().campaigns.map((c) =>
             c.id === campaignId
               ? {
                   ...c,
-                  raised: c.raised + contribution.amount,
-                  backers: [
-                    ...c.backers,
-                    {
-                      address: contribution.address,
-                      amount: contribution.amount,
-                      tx_hash: contribution.tx_hash,
-                      date: new Date().toISOString(),
-                    },
-                  ],
+                  raised: (c.raised || 0) + contribution.amount,
+                  backers: [...(c.backers || []), localContrib],
                 }
               : c
           ),
         });
       }
     } catch (err) {
+      console.warn("recordFund API failed, updating locally:", err.message);
       // Still update locally on API failure
+      const localContrib = {
+        backer_address: contribution.address || contribution.backer_address,
+        address: contribution.address || contribution.backer_address,
+        amount: contribution.amount,
+        tx_hash: contribution.tx_hash || "",
+        created_at: new Date().toISOString(),
+        date: new Date().toISOString(),
+      };
       set({
         campaigns: get().campaigns.map((c) =>
           c.id === campaignId
             ? {
                 ...c,
-                raised: c.raised + contribution.amount,
-                backers: [
-                  ...c.backers,
-                  {
-                    address: contribution.address,
-                    amount: contribution.amount,
-                    tx_hash: contribution.tx_hash,
-                    date: new Date().toISOString(),
-                  },
-                ],
+                raised: (c.raised || 0) + contribution.amount,
+                backers: [...(c.backers || []), localContrib],
               }
             : c
         ),
@@ -142,11 +160,11 @@ export const useCampaignStore = create((set, get) => ({
   },
 
   // ── Mark campaign as refunded ──
-  markRefunded: async (campaignId) => {
+  markRefunded: async (campaignId, data) => {
     try {
       const hasBackend = await checkBackend();
       if (hasBackend) {
-        await api.refundCampaign(campaignId);
+        await api.refundCampaign(campaignId, data);
       }
     } catch (err) {
       console.warn("API refund failed:", err.message);
@@ -159,7 +177,7 @@ export const useCampaignStore = create((set, get) => ({
               ...c,
               refunded: true,
               refunded_at: new Date().toISOString(),
-              backers: c.backers.map((b) => ({ ...b, refunded: true })),
+              backers: (c.backers || []).map((b) => ({ ...b, refunded: true })),
             }
           : c
       ),

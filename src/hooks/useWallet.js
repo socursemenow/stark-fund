@@ -67,8 +67,6 @@ export function useWallet() {
   const connect = useCallback(async () => {
     const sdk = getSDK();
     try {
-      // Official v2 API: OnboardStrategy.Cartridge
-      // https://docs.starknet.io/build/starkzap/examples
       const policies = [
         { target: STRK_ADDRESS, method: "transfer" },
         { target: STRK_ADDRESS, method: "approve" },
@@ -82,7 +80,6 @@ export function useWallet() {
       const w = onboard.wallet;
 
       if (w) {
-        // Register swap providers AFTER onboarding (v2 pattern)
         try {
           w.registerSwapProvider(new AvnuSwapProvider());
           w.registerSwapProvider(new EkuboSwapProvider());
@@ -134,14 +131,12 @@ export function useWallet() {
     }
   }, []);
 
-  // Extract hash from v2 tx result: { hash, explorerUrl, wait() }
   const extractHash = (tx) => {
     if (!tx) return null;
     if (typeof tx === "string") return tx;
     return tx.hash || tx.transaction_hash || tx.toString();
   };
 
-  // Get explorer URL from tx result (v2 provides it directly)
   const extractExplorer = (tx) => {
     if (!tx) return null;
     if (tx.explorerUrl) return tx.explorerUrl;
@@ -149,10 +144,18 @@ export function useWallet() {
     return hash ? getExplorerUrl(hash) : null;
   };
 
-  // Get wallet address as string
   const getAddr = () => {
     if (!wallet) return null;
     return typeof wallet.address === "object" ? wallet.address.toString() : wallet.address;
+  };
+
+  // Helper: safely convert any address (string, object, BigInt) to a plain string
+  const toAddrStr = (addr) => {
+    if (!addr) return "";
+    if (typeof addr === "string") return addr;
+    if (typeof addr === "bigint") return "0x" + addr.toString(16);
+    if (typeof addr.toString === "function") return addr.toString();
+    return String(addr);
   };
 
   // ═══════════════════════════════════════════════════════════════════
@@ -162,8 +165,6 @@ export function useWallet() {
   // ═══════════════════════════════════════════════════════════════════
 
   // ── transfer(recipient, amount) ──
-  // Used by: FundModal, FounderPanel, CreateModal
-  // v2 API: wallet.transfer(token, [{ to, amount }])
   const transfer = useCallback(
     async (recipient, amount) => {
       return withLock(async () => {
@@ -187,7 +188,6 @@ export function useWallet() {
   );
 
   // ── swapAndTransfer(token, amount, recipient) ──
-  // Used by: FundModal (pay with USDC/ETH)
   const swapAndTransfer = useCallback(
     async (tokenSymbol, amount, recipient) => {
       return withLock(async () => {
@@ -199,7 +199,6 @@ export function useWallet() {
 
         const amountIn = Amount.parse(String(amount), fromToken);
 
-        // v2 API: wallet.swap({ tokenIn, tokenOut, amountIn, slippageBps })
         const swapTx = await wallet.swap(
           { tokenIn: fromToken, tokenOut: toToken, amountIn, slippageBps: 100n },
           { feeMode: "sponsored" }
@@ -210,35 +209,26 @@ export function useWallet() {
           ? formatBase(swapTx.amountOut, toToken)
           : amount;
 
-        // v2 API: wallet.transfer(token, [{ to, amount }])
         const transferTx = await wallet.transfer(STRK, [
           { to: fromAddress(recipient), amount: Amount.parse(String(strkReceived), STRK) },
         ]);
         await transferTx.wait();
 
-        return {
-          swapTx,
-          transferTx,
-          strkReceived,
-        };
+        return { swapTx, transferTx, strkReceived };
       });
     },
     [wallet, withLock]
   );
 
   // ── getQuote(tokenOrParams, amount?) ──
-  // Used by: FundModal (legacy: string + amount) and SwapModal (object params)
-  // v2 API: wallet.getQuote({ tokenIn, tokenOut, amountIn })
   const getQuote = useCallback(
     async (tokenOrParams, amount) => {
       if (!wallet) throw new Error("Connect wallet first");
 
-      // New-style call: getQuote({ tokenIn, tokenOut, amountIn, ... })
       if (typeof tokenOrParams === "object" && (tokenOrParams.tokenIn || tokenOrParams.inputToken)) {
         return wallet.getQuote(tokenOrParams);
       }
 
-      // Legacy call: getQuote("ETH", "10")
       const fromToken = TOKEN_MAP[tokenOrParams];
       const toToken = STRK;
       if (!fromToken) return null;
@@ -263,8 +253,6 @@ export function useWallet() {
   );
 
   // ── swap(params) ──
-  // Used by: SwapModal
-  // v2 API: wallet.swap({ tokenIn, tokenOut, amountIn, slippageBps }, { feeMode })
   const swap = useCallback(
     async (params) => {
       return withLock(async () => {
@@ -285,8 +273,7 @@ export function useWallet() {
   );
 
   // ── stake(amount) ──
-  // Used by: StakeModal
-  // v2 API: wallet.enterPool(poolAddress, Amount.parse("100", STRK))
+  // FIXED: ensures all addresses passed to SDK are plain strings, not objects
   const stake = useCallback(
     async (amount) => {
       return withLock(async () => {
@@ -297,14 +284,22 @@ export function useWallet() {
 
         // Discover staking pools
         const stakingTokens = await sdk.stakingTokens?.() || [];
-        const strkStaking = stakingTokens.find(
-          (t) => t.address?.toLowerCase() === STRK_ADDRESS.toLowerCase()
-        );
+        const strkStaking = stakingTokens.find((t) => {
+          const addr = toAddrStr(t.address);
+          return addr.toLowerCase() === STRK_ADDRESS.toLowerCase();
+        });
 
         if (strkStaking) {
+          // Ensure address is a plain string before passing to SDK
+          if (strkStaking.address && typeof strkStaking.address !== "string") {
+            strkStaking.address = toAddrStr(strkStaking.address);
+          }
+
           const pools = await sdk.getStakerPools?.(strkStaking) || [];
           if (pools.length > 0) {
-            const poolAddr = pools[0].address || pools[0].poolAddress;
+            // Extract pool address as a plain string (not an object)
+            const poolAddr = toAddrStr(pools[0].address || pools[0].poolAddress);
+
             // v2 API: wallet.enterPool(poolAddress, amount)
             const tx = await wallet.enterPool(poolAddr, amt);
             await tx.wait();
@@ -325,8 +320,6 @@ export function useWallet() {
   );
 
   // ── batchRefund(recipients) ──
-  // Used by: VoteRefund
-  // v2 API: wallet.transfer(token, [{ to, amount }, { to, amount }, ...])
   const batchRefund = useCallback(
     async (recipients) => {
       return withLock(async () => {
@@ -341,7 +334,6 @@ export function useWallet() {
 
         if (transfers.length === 0) throw new Error("No recipients to refund");
 
-        // v2 API: batch transfer — single tx, multiple recipients
         const tx = await wallet.transfer(STRK, transfers);
         await tx.wait();
 
@@ -357,8 +349,6 @@ export function useWallet() {
   );
 
   // ── refreshBalances() ──
-  // Used by: WalletPanel
-  // v2 API: wallet.balanceOf(tokenPreset) → { toFormatted() }
   const refreshBalances = useCallback(async () => {
     if (!wallet) return;
     try {
@@ -371,14 +361,11 @@ export function useWallet() {
       const fmt = (result) => {
         if (result.status !== "fulfilled" || !result.value) return "0";
         try {
-          // v2 returns Balance object with toFormatted()
           if (result.value.toFormatted) {
-            // toFormatted() returns "STRK 150.25" — extract just the number
             const formatted = result.value.toFormatted();
             const parts = formatted.split(" ");
             return parts.length > 1 ? parts[1] : parts[0];
           }
-          // Fallback: raw bigint
           return formatBase(BigInt(result.value.toString()), { decimals: 18 });
         } catch {
           return "0";
@@ -396,12 +383,10 @@ export function useWallet() {
   }, [wallet]);
 
   // ── getBalance(tokenAddress) ──
-  // Used internally — returns raw value
   const getBalance = useCallback(
     async (tokenAddress = STRK_ADDRESS) => {
       if (!wallet) return "0";
       try {
-        // Find token preset by address
         const token = Object.values(TOKEN_MAP).find(
           (t) => t?.address?.toLowerCase() === tokenAddress?.toLowerCase()
         ) || STRK;
@@ -430,12 +415,10 @@ export function useWallet() {
         let tx;
 
         if (payToken === "STRK") {
-          // v2 API: wallet.transfer(token, [{ to, amount }])
           tx = await wallet.transfer(STRK, [
             { to: fromAddress(PLATFORM_WALLET), amount: Amount.parse(String(amountSTRK), STRK) },
           ]);
         } else {
-          // Swap first, then transfer
           const inputToken = TOKEN_MAP[payToken];
           if (!inputToken) throw new Error(`Token ${payToken} not found`);
 
@@ -452,7 +435,6 @@ export function useWallet() {
           );
           await swapTx.wait();
 
-          // Now transfer STRK to escrow
           tx = await wallet.transfer(STRK, [
             { to: fromAddress(PLATFORM_WALLET), amount: Amount.parse(String(amountSTRK), STRK) },
           ]);
@@ -462,7 +444,6 @@ export function useWallet() {
         const hashStr = tx.hash || extractHash(tx);
         if (!hashStr) throw new Error("Transaction returned no hash");
 
-        // Record in backend
         const backerAddr = getAddr();
         try {
           await fetch(`${API_URL}/api/campaigns/${campaignId}/fund`, {
@@ -494,7 +475,6 @@ export function useWallet() {
       return withLock(async () => {
         if (!wallet) throw new Error("Connect wallet first");
 
-        // v2 API: wallet.transfer(token, [{ to, amount }])
         const tx = await wallet.transfer(STRK, [
           { to: fromAddress(PLATFORM_WALLET), amount: Amount.parse(String(amountSTRK), STRK) },
         ]);
@@ -561,7 +541,6 @@ export function useWallet() {
       return withLock(async () => {
         if (!wallet) throw new Error("Connect wallet first");
 
-        // v2 API: wallet.transfer(token, [{ to, amount }])
         const tx = await wallet.transfer(STRK, [
           { to: fromAddress(PLATFORM_WALLET), amount: Amount.parse("0.001", STRK) },
         ]);

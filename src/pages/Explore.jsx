@@ -8,24 +8,22 @@ import { useWalletStore } from "../hooks/useWallet";
 
 export default function Explore({ user }) {
   const navigate = useNavigate();
-  const { campaigns, fetchCampaigns, initialized, loading } = useCampaignStore();
+  const { campaigns, fetchCampaigns, loading } = useCampaignStore();
   const connected = useWalletStore((s) => s.connected);
   const [tab, setTab] = useState("all");
   const [createOpen, setCreateOpen] = useState(false);
 
-  // Fetch campaigns from API on mount
+  // Always fetch campaigns on mount + after create modal closes
   useEffect(() => {
-    if (!initialized) {
-      fetchCampaigns();
-    }
-  }, [initialized]);
+    fetchCampaigns();
+  }, [createOpen]);
 
   const filtered =
     tab === "all"
       ? campaigns
       : tab === "funded"
-      ? campaigns.filter((c) => c.raised >= c.goal)
-      : campaigns.filter((c) => c.raised < c.goal);
+      ? campaigns.filter((c) => (c.raised || 0) >= c.goal)
+      : campaigns.filter((c) => (c.raised || 0) < c.goal);
 
   return (
     <div className="max-w-[840px] mx-auto px-5 pb-16 pt-4">
@@ -83,7 +81,7 @@ export default function Explore({ user }) {
         ))}
       </div>
 
-      {filtered.length === 0 && (
+      {!loading && filtered.length === 0 && (
         <div className="text-center py-16 text-[#5c5672]">
           <p className="text-4xl mb-3">⚡</p>
           <p className="text-lg font-semibold text-[#8a8498] mb-1">No campaigns yet</p>
