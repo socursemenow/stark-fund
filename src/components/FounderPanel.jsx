@@ -52,7 +52,12 @@ export default function FounderPanel({ campaign, onStake }) {
           releaseTx = result.txHash;
         }
       } catch (serverErr) {
-        console.warn("[FounderPanel] Server release failed, marking locally:", serverErr.message);
+        // If server says "already released", treat as success
+        if (serverErr?.message?.includes("already released")) {
+          console.log("[FounderPanel] Already released on server");
+        } else {
+          console.warn("[FounderPanel] Server release failed, marking locally:", serverErr.message);
+        }
       }
 
       // Mark campaign as released in store (persists across page navigations)

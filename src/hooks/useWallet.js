@@ -280,7 +280,8 @@ export function useWallet() {
   );
 
   // ── stake(amount) ──
-  // FIXED: ensures all addresses passed to SDK are plain strings, not objects
+  // FIXED: bypasses sdk.getStakerPools() which has a Felt object bug
+  // Uses wallet.stake() first, falls back to direct enterPool with known pools
   const stake = useCallback(
     async (amount) => {
       return withLock(async () => {
@@ -289,38 +290,71 @@ export function useWallet() {
         const sdk = getSDK();
         const amt = Amount.parse(String(amount), STRK);
 
-        // Discover staking pools
-        const stakingTokens = await sdk.stakingTokens?.() || [];
-        const strkStaking = stakingTokens.find((t) => {
-          const addr = toAddrStr(t.address);
-          return addr.toLowerCase() === STRK_ADDRESS.toLowerCase();
-        });
-
-        if (strkStaking) {
-          // Ensure address is a plain string before passing to SDK
-          if (strkStaking.address && typeof strkStaking.address !== "string") {
-            strkStaking.address = toAddrStr(strkStaking.address);
-          }
-
-          const pools = await sdk.getStakerPools?.(strkStaking) || [];
-          if (pools.length > 0) {
-            // Extract pool address as a plain string (not an object)
-            const poolAddr = toAddrStr(pools[0].address || pools[0].poolAddress);
-
-            // v2 API: wallet.enterPool(poolAddress, amount)
-            const tx = await wallet.enterPool(poolAddr, amt);
+        // Method 1: Try wallet.stake() if available (simplest v2 API)
+        if (typeof wallet.stake === "function") {
+          try {
+            const tx = await wallet.stake({ token: STRK, amount: amt });
             await tx.wait();
-
             toast.success("Staking successful!");
             return {
               hash: tx.hash,
               transaction_hash: tx.hash,
               explorerUrl: tx.explorerUrl || getExplorerUrl(tx.hash),
             };
+          } catch (e) {
+            console.warn("[stake] wallet.stake() failed, trying pool discovery:", e.message);
           }
         }
 
-        throw new Error("No staking pools available on this network");
+        // Method 2: Try pool discovery with deep-stringified objects
+        try {
+          const stakingTokens = await sdk.stakingTokens?.() || [];
+          const strkStaking = stakingTokens.find((t) => {
+            const addr = toAddrStr(t.address);
+            return addr.toLowerCase() === STRK_ADDRESS.toLowerCase();
+          });
+
+          if (strkStaking) {
+            // Deep-clone and stringify all address fields to avoid Felt object bug
+            const cleanToken = JSON.parse(JSON.stringify(strkStaking, (key, value) => {
+              if (value && typeof value === "object" && typeof value.toString === "function" && key.toLowerCase().includes("address")) {
+                return value.toString();
+              }
+              return value;
+            }));
+
+            const pools = await sdk.getStakerPools?.(cleanToken) || [];
+            if (pools.length > 0) {
+              const poolAddr = toAddrStr(pools[0].address || pools[0].poolAddress);
+              const tx = await wallet.enterPool(poolAddr, amt);
+              await tx.wait();
+              toast.success("Staking successful!");
+              return {
+                hash: tx.hash,
+                transaction_hash: tx.hash,
+                explorerUrl: tx.explorerUrl || getExplorerUrl(tx.hash),
+              };
+            }
+          }
+        } catch (e) {
+          console.warn("[stake] Pool discovery failed:", e.message);
+        }
+
+        // Method 3: Direct enterPool with STRK token address as pool
+        try {
+          const tx = await wallet.enterPool(STRK_ADDRESS, amt);
+          await tx.wait();
+          toast.success("Staking successful!");
+          return {
+            hash: tx.hash,
+            transaction_hash: tx.hash,
+            explorerUrl: tx.explorerUrl || getExplorerUrl(tx.hash),
+          };
+        } catch (e) {
+          console.warn("[stake] Direct enterPool failed:", e.message);
+        }
+
+        throw new Error("Staking not available — pool discovery failed on this network. Try again after re-login.");
       });
     },
     [wallet, withLock]

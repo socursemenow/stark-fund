@@ -208,16 +208,13 @@ app.post("/api/campaigns/:id/fund", async (req, res) => {
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
 
     const status = campaign.status || "active";
-    if (status !== "active") {
+    // Allow funding on active campaigns AND re-funding refunded campaigns (if not expired)
+    if (status !== "active" && status !== "refunded") {
       return res.status(400).json({ error: `Campaign is ${status}, cannot fund` });
     }
 
     if (new Date(campaign.deadline) < new Date()) {
       return res.status(400).json({ error: "Campaign deadline has passed. Funding is closed." });
-    }
-
-    if (campaign.refunded) {
-      return res.status(400).json({ error: "Campaign has been refunded." });
     }
 
     if (!backer_address || !amount || amount <= 0) {
@@ -265,10 +262,14 @@ app.post("/api/campaigns/:id/fund", async (req, res) => {
     });
     if (error) throw error;
 
-    // Update raised
+    // Update raised + re-activate if previously refunded
     await supabase
       .from("campaigns")
-      .update({ raised: currentRaised + cappedAmount })
+      .update({
+        raised: currentRaised + cappedAmount,
+        status: "active",
+        refunded: false,
+      })
       .eq("id", req.params.id);
 
     const updated = await campaignWithBackers(req.params.id);
@@ -406,6 +407,12 @@ app.post("/api/campaigns/:id/refund", async (req, res) => {
             .eq("id", c.id);
         }
 
+        // Clear all votes so voting resets if campaign gets re-funded
+        await supabase
+          .from("votes")
+          .delete()
+          .eq("campaign_id", req.params.id);
+
         await supabase
           .from("campaigns")
           .update({
@@ -437,6 +444,12 @@ app.post("/api/campaigns/:id/refund", async (req, res) => {
         .update({ refunded: true })
         .eq("id", c.id);
     }
+
+    // Clear all votes so voting resets if campaign gets re-funded
+    await supabase
+      .from("votes")
+      .delete()
+      .eq("campaign_id", req.params.id);
 
     await supabase
       .from("campaigns")
