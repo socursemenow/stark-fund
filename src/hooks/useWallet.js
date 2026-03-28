@@ -80,6 +80,13 @@ export function useWallet() {
       const w = onboard.wallet;
 
       if (w) {
+        // Force wallet.address to be a plain string — the SDK internally
+        // passes this to contract calls (like staker_pool_info) that expect
+        // String/Number/BigInt, not Felt objects. Without this, staking breaks.
+        if (w.address && typeof w.address === "object") {
+          w.address = w.address.toString();
+        }
+
         try {
           w.registerSwapProvider(new AvnuSwapProvider());
           w.registerSwapProvider(new EkuboSwapProvider());

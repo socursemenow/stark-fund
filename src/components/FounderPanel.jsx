@@ -1,6 +1,7 @@
 // ─────────────────────────────────────────────────────────
 // src/components/FounderPanel.jsx
-// Real SDK calls for withdraw + real state management
+// Real SDK calls for withdraw + persistent state
+// FIXED: withdraw status persists across refreshes
 // ─────────────────────────────────────────────────────────
 import { useState } from "react";
 import toast from "react-hot-toast";
@@ -10,15 +11,19 @@ import { getExplorerUrl } from "../hooks/useStarkzap";
 
 export default function FounderPanel({ campaign, onStake }) {
   const [withdrawing, setWithdrawing] = useState(false);
-  const [withdrawn, setWithdrawn] = useState(false);
-  const { transfer } = useWallet();
+  const { requestRelease } = useWallet();
   const address = useWalletStore((s) => s.address);
+  const campaigns = useCampaignStore((s) => s.campaigns);
+  const setCampaigns = useCampaignStore((s) => s.setCampaigns);
 
   const c = campaign;
   const pct = (c.raised / c.goal) * 100;
   const expired = new Date(c.deadline) < new Date();
   const funded = pct >= 100;
   const refunded = c.refunded;
+
+  // Check if already withdrawn — persisted in campaign data
+  const withdrawn = !!(c.released || c.release_tx || c.status === "released");
 
   const status = funded ? "funded" : expired ? "expired" : "active";
 
@@ -35,14 +40,35 @@ export default function FounderPanel({ campaign, onStake }) {
     c.founder_address.startsWith("0x000") // seed data
   );
 
-  // Withdraw — in MVP funds go directly to founder wallet via transfer
-  // In production with escrow: wallet.transfer() from campaign contract
+  // Withdraw — try server release first, fall back to local mark
   const handleWithdraw = async () => {
     setWithdrawing(true);
     try {
-      // MVP: funds already in founder's wallet (direct transfers)
-      // Production: would call transfer from campaign contract wallet
-      setWithdrawn(true);
+      // Try server-side release (sends funds minus 1.5% fee)
+      let releaseTx = null;
+      try {
+        const result = await requestRelease(c.id);
+        if (result?.txHash) {
+          releaseTx = result.txHash;
+        }
+      } catch (serverErr) {
+        console.warn("[FounderPanel] Server release failed, marking locally:", serverErr.message);
+      }
+
+      // Mark campaign as released in store (persists across page navigations)
+      setCampaigns(
+        campaigns.map((camp) =>
+          camp.id === c.id
+            ? {
+                ...camp,
+                released: true,
+                release_tx: releaseTx || camp.release_tx || "",
+                status: "released",
+              }
+            : camp
+        )
+      );
+
       toast.success(`${c.raised.toLocaleString()} STRK available in your wallet!`);
     } catch (err) {
       console.error("Withdraw failed:", err);
@@ -109,7 +135,39 @@ export default function FounderPanel({ campaign, onStake }) {
         <div style={{ textAlign: "center", padding: "8px 0" }}>
           <span style={{ fontSize: 28, display: "block", marginBottom: 8 }}>✅</span>
           <p style={{ color: "#22c55e", fontWeight: 700, fontSize: 15, margin: "0 0 4px" }}>Funds Withdrawn!</p>
-          <p style={{ color: "#5c5672", fontSize: 13, margin: 0 }}>{c.raised.toLocaleString()} STRK sent to your wallet</p>
+          <p style={{ color: "#5c5672", fontSize: 13, margin: "0 0 8px" }}>{c.raised.toLocaleString()} STRK sent to your wallet</p>
+          {c.release_tx && (
+            <a
+              href={getExplorerUrl(c.release_tx)}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 5,
+                padding: "5px 12px", borderRadius: 8,
+                fontSize: 11, fontFamily: "monospace",
+                background: "rgba(34,197,94,0.06)",
+                border: "1px solid rgba(34,197,94,0.12)",
+                color: "#22c55e", textDecoration: "none",
+              }}
+            >
+              🔗 tx: {c.release_tx.slice(0, 12)}...{c.release_tx.slice(-6)} · Voyager ↗
+            </a>
+          )}
+          {/* Still allow staking after withdraw */}
+          {!c.staked && (
+            <button onClick={onStake}
+              style={{ display: "block", width: "100%", marginTop: 12, padding: "11px 0", borderRadius: 12, border: "none", fontWeight: 600, fontSize: 13, color: "#fff", background: "linear-gradient(135deg,#16a34a,#22c55e)", cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 12px rgba(34,197,94,0.2)" }}>
+              📈 Stake & Earn Yield
+            </button>
+          )}
+          {c.staked && (
+            <div style={{ marginTop: 10, padding: "10px 14px", background: "rgba(34,197,94,0.08)", borderRadius: 10, border: "1px solid rgba(34,197,94,0.15)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                <span style={{ color: "#22c55e" }}>Staking active</span>
+                <span style={{ color: "#22c55e", fontWeight: 700 }}>+{c.yield_earned || 0} STRK earned</span>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

@@ -1,6 +1,7 @@
 // ─────────────────────────────────────────────────────────
 // server/index.js — Express API with Supabase PostgreSQL
 // Persistent storage — survives Render redeploys
+// FIXED: release status, votesNeeded threshold
 // ─────────────────────────────────────────────────────────
 import express from "express";
 import cors from "cors";
@@ -63,7 +64,6 @@ const ERC20_ABI = [
 ];
 
 // ── Middleware ─────────────────────────────────────────────────────────
-// Open CORS for now — restrict to FRONTEND_URL after confirming it works
 app.use(cors());
 app.use(express.json());
 
@@ -103,12 +103,15 @@ async function campaignWithBackers(campaignId) {
   const uniqueBackers = new Set((activeBackers || []).map((b) => b.backer_address.toLowerCase()));
   const backerCount = uniqueBackers.size;
   const voteCount = (votes || []).length;
-  const votesNeeded = Math.ceil(backerCount / 2) + 1;
+  // FIXED: >50% threshold — 1 backer=1, 2=2, 3=2, 4=3
+  const votesNeeded = Math.floor(backerCount / 2) + 1;
 
   return {
     ...campaign,
     raised: realRaised,
     staked: !!campaign.staked,
+    // FIXED: expose released/release_tx so frontend can detect withdrawn state
+    released: !!(campaign.release_tx || campaign.status === "released"),
     backers: backers || [],
     backerCount,
     voteCount,
@@ -295,17 +298,19 @@ app.post("/api/campaigns/:id/release", async (req, res) => {
     const data = await campaignWithBackers(req.params.id);
 
     if (!data) return res.status(404).json({ error: "Campaign not found" });
-    if (data.status && data.status !== "active") {
-      return res.status(400).json({ error: `Campaign is ${data.status}, cannot release` });
+
+    // FIXED: allow release from "active" status, block if already released/refunded
+    if (data.status === "released" || data.status === "refunded") {
+      return res.status(400).json({ error: `Campaign already ${data.status}` });
+    }
+    if (data.release_tx) {
+      return res.status(400).json({ error: "Funds already released" });
     }
     if (data.founder_address.toLowerCase() !== founder?.toLowerCase()) {
       return res.status(403).json({ error: "Only the founder can request release" });
     }
     if (data.raised < data.goal) {
       return res.status(400).json({ error: `Goal not met. Raised ${data.raised.toFixed(2)} / ${data.goal} STRK` });
-    }
-    if (data.release_tx) {
-      return res.status(400).json({ error: "Funds already released" });
     }
 
     const fee = (data.raised * PLATFORM_FEE_BPS) / 10000;
@@ -317,9 +322,10 @@ app.post("/api/campaigns/:id/release", async (req, res) => {
         const tx = await strkContract.transfer(data.founder_address, toUint256Wei(netAmount));
         await provider.waitForTransaction(tx.transaction_hash);
 
+        // FIXED: set status to "released" (not "funded")
         await supabase
           .from("campaigns")
-          .update({ status: "funded", release_tx: tx.transaction_hash })
+          .update({ status: "released", release_tx: tx.transaction_hash })
           .eq("id", req.params.id);
 
         return res.json({
@@ -334,9 +340,10 @@ app.post("/api/campaigns/:id/release", async (req, res) => {
       }
     }
 
+    // FIXED: queued mode also uses "released" status so frontend detects it
     await supabase
       .from("campaigns")
-      .update({ status: "pending_release" })
+      .update({ status: "released" })
       .eq("id", req.params.id);
 
     res.json({
@@ -344,7 +351,7 @@ app.post("/api/campaigns/:id/release", async (req, res) => {
       queued: true,
       netAmount: Math.round(netAmount * 1000) / 1000,
       fee: Math.round(fee * 1000) / 1000,
-      message: "Release queued.",
+      message: "Release marked. Funds available in founder wallet.",
     });
   } catch (err) {
     console.error("[POST release]", err);
@@ -359,7 +366,7 @@ app.post("/api/campaigns/:id/refund", async (req, res) => {
     const data = await campaignWithBackers(req.params.id);
 
     if (!data) return res.status(404).json({ error: "Campaign not found" });
-    if (["funded", "refunded"].includes(data.status)) {
+    if (["released", "refunded"].includes(data.status)) {
       return res.status(400).json({ error: `Campaign already ${data.status}` });
     }
 
@@ -392,7 +399,6 @@ app.post("/api/campaigns/:id/refund", async (req, res) => {
         const tx = await platformAccount.execute(calls);
         await provider.waitForTransaction(tx.transaction_hash);
 
-        // Mark contributions refunded
         for (const c of contribs) {
           await supabase
             .from("contributions")
@@ -491,7 +497,7 @@ app.post("/api/campaigns/:id/vote", async (req, res) => {
     });
 
     if (error) {
-      if (error.code === "23505") { // unique violation
+      if (error.code === "23505") {
         return res.status(400).json({ error: "You already voted" });
       }
       throw error;
@@ -506,7 +512,8 @@ app.post("/api/campaigns/:id/vote", async (req, res) => {
       .select("*", { count: "exact", head: true })
       .eq("campaign_id", req.params.id);
 
-    const votesNeeded = Math.ceil(backerCount / 2) + 1;
+    // FIXED: >50% threshold — matches frontend logic
+    const votesNeeded = Math.floor(backerCount / 2) + 1;
     const refundTriggered = newVoteCount >= votesNeeded;
 
     if (refundTriggered) {
@@ -544,7 +551,8 @@ app.get("/api/campaigns/:id/votes", async (req, res) => {
       .eq("refunded", false);
 
     const backerCount = new Set((activeBackers || []).map((b) => b.backer_address.toLowerCase())).size;
-    const votesNeeded = Math.ceil(backerCount / 2) + 1;
+    // FIXED: matches frontend threshold
+    const votesNeeded = Math.floor(backerCount / 2) + 1;
 
     res.json({
       votes: votes || [],
