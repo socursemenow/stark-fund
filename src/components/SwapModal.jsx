@@ -30,8 +30,15 @@ export default function SwapModal({ open, onClose }) {
   const balances = useWalletStore((s) => s.balances);
 
   const parsedAmt = parseFloat(amount) || 0;
-  const fromBalance = parseFloat(balances?.[from] || "0");
-  const toBalance = parseFloat(balances?.[to] || "0");
+  // Balances from store can be "150.25" or "STRK 150.25" or "" — safely extract number
+  const parseBal = (val) => {
+    if (!val || val === "0") return 0;
+    const str = String(val).replace(/[^0-9.]/g, "");
+    const n = parseFloat(str);
+    return isNaN(n) ? 0 : n;
+  };
+  const fromBalance = parseBal(balances?.[from]);
+  const toBalance = parseBal(balances?.[to]);
 
   // Refresh balances when modal opens
   useEffect(() => {
