@@ -63,9 +63,8 @@ const ERC20_ABI = [
 ];
 
 // ── Middleware ─────────────────────────────────────────────────────────
-app.use(cors({
-  origin: [FRONTEND_URL, "http://localhost:5173", "http://localhost:5174"],
-}));
+// Open CORS for now — restrict to FRONTEND_URL after confirming it works
+app.use(cors());
 app.use(express.json());
 
 // ── Helpers ────────────────────────────────────────────────────────────
