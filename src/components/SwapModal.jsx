@@ -2,6 +2,7 @@
 // src/components/SwapModal.jsx
 // Real token swap via wallet.swap() + wallet.getQuote()
 // Providers: AVNU (aggregator) + Ekubo (AMM)
+// FIXED: shows available balances + MAX button
 // ─────────────────────────────────────────────────────────
 import { useState, useEffect } from "react";
 import toast from "react-hot-toast";
@@ -25,9 +26,17 @@ export default function SwapModal({ open, onClose }) {
   const [explorerUrl, setExplorerUrl] = useState(null);
   const [error, setError] = useState(null);
 
-  const { swap, connected } = useWallet();
+  const { swap, refreshBalances, connected } = useWallet();
+  const balances = useWalletStore((s) => s.balances);
 
   const parsedAmt = parseFloat(amount) || 0;
+  const fromBalance = parseFloat(balances?.[from] || "0");
+  const toBalance = parseFloat(balances?.[to] || "0");
+
+  // Refresh balances when modal opens
+  useEffect(() => {
+    if (open && connected) refreshBalances();
+  }, [open, connected]);
 
   // Fetch real quote with debounce
   useEffect(() => {
@@ -48,7 +57,6 @@ export default function SwapModal({ open, onClose }) {
 
         const amountIn = Amount.parse(amount, fromToken);
 
-        // Try AVNU first, then Ekubo if AVNU fails
         let q = null;
         let usedProvider = null;
 
@@ -61,7 +69,7 @@ export default function SwapModal({ open, onClose }) {
               provider,
             });
             usedProvider = provider;
-            break; // got a quote, stop trying
+            break;
           } catch (err) {
             console.warn(`${provider} quote failed:`, err.message);
           }
@@ -94,7 +102,6 @@ export default function SwapModal({ open, onClose }) {
     setError(null);
 
     try {
-      // Use the same provider that gave us the quote
       const { wallet, tokens } = useWalletStore.getState();
 
       const tx = await wallet.swap({
@@ -111,6 +118,9 @@ export default function SwapModal({ open, onClose }) {
       setExplorerUrl(explorer);
       setStep(2);
       toast.success(`Swapped ${parsedAmt} ${from} → ${quote?.amountOut || "?"} ${to}`);
+
+      // Refresh balances after swap
+      refreshBalances();
     } catch (err) {
       console.error("Swap failed:", err);
       setError(err.message || "Swap failed");
@@ -118,6 +128,8 @@ export default function SwapModal({ open, onClose }) {
       toast.error("Swap failed");
     }
   };
+
+  const handleMax = () => setAmount(String(fromBalance));
 
   const reset = () => { setAmount(""); setStep(0); setQuote(null); setTxHash(null); setExplorerUrl(null); setError(null); };
   const handleClose = () => { reset(); onClose(); };
@@ -144,7 +156,15 @@ export default function SwapModal({ open, onClose }) {
           <>
             {/* From */}
             <div style={{ marginBottom: 6 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#8a8498", marginBottom: 5, display: "block" }}>From</label>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#8a8498" }}>From</label>
+                <button
+                  onClick={handleMax}
+                  style={{ fontSize: 11, fontWeight: 700, color: fromToken.color, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit" }}
+                >
+                  Balance: {fromBalance.toLocaleString(undefined, { maximumFractionDigits: 4 })} {from}
+                </button>
+              </div>
               <div style={{ display: "flex", gap: 8, background: "rgba(7,6,11,0.6)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 12, padding: "10px 14px" }}>
                 <select value={from} onChange={(e) => setFrom(e.target.value)}
                   style={{ background: "transparent", border: "none", color: fromToken.color, fontSize: 15, fontWeight: 700, outline: "none", fontFamily: "inherit", cursor: "pointer" }}>
@@ -155,6 +175,11 @@ export default function SwapModal({ open, onClose }) {
                 <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00"
                   style={{ flex: 1, background: "transparent", border: "none", color: "#e8e4ef", fontSize: 18, fontWeight: 700, textAlign: "right", outline: "none", fontFamily: "inherit" }} />
               </div>
+              {parsedAmt > fromBalance && fromBalance > 0 && (
+                <p style={{ fontSize: 11, color: "#ef4444", marginTop: 4, marginBottom: 0 }}>
+                  Insufficient {from} balance
+                </p>
+              )}
             </div>
 
             {/* Flip */}
@@ -164,7 +189,12 @@ export default function SwapModal({ open, onClose }) {
 
             {/* To */}
             <div style={{ marginBottom: 14 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#8a8498", marginBottom: 5, display: "block" }}>To</label>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#8a8498" }}>To</label>
+                <span style={{ fontSize: 11, color: "#5c5672" }}>
+                  Balance: {toBalance.toLocaleString(undefined, { maximumFractionDigits: 4 })} {to}
+                </span>
+              </div>
               <div style={{ display: "flex", gap: 8, background: "rgba(7,6,11,0.6)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 12, padding: "10px 14px", alignItems: "center" }}>
                 <select value={to} onChange={(e) => setTo(e.target.value)}
                   style={{ background: "transparent", border: "none", color: toToken.color, fontSize: 15, fontWeight: 700, outline: "none", fontFamily: "inherit", cursor: "pointer" }}>
@@ -195,7 +225,7 @@ export default function SwapModal({ open, onClose }) {
 
             {parsedAmt > 0 && !quote && !quoteLoading && (
               <div style={{ padding: "10px 14px", background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.12)", borderRadius: 10, marginBottom: 14, fontSize: 13, color: "#ef4444" }}>
-                No route found (tried AVNU + Ekubo). 
+                No route found (tried AVNU + Ekubo).
                 {from !== "ETH" && to !== "ETH" && (
                   <span style={{ display: "block", fontSize: 12, color: "#8a8498", marginTop: 4 }}>
                     Tip: On Sepolia testnet, try STRK ↔ ETH — it has the most liquidity.
@@ -204,8 +234,8 @@ export default function SwapModal({ open, onClose }) {
               </div>
             )}
 
-            <button onClick={handleSwap} disabled={parsedAmt <= 0 || from === to || !connected || !quote}
-              style={{ width: "100%", padding: "12px 0", borderRadius: 12, border: "none", fontWeight: 600, fontSize: 14, color: "#fff", background: "linear-gradient(135deg,#f97316,#ea580c)", cursor: parsedAmt <= 0 || !connected || !quote ? "not-allowed" : "pointer", opacity: parsedAmt <= 0 || !connected || !quote ? 0.4 : 1, boxShadow: "0 2px 16px rgba(249,115,22,0.3)", fontFamily: "inherit" }}>
+            <button onClick={handleSwap} disabled={parsedAmt <= 0 || from === to || !connected || !quote || parsedAmt > fromBalance}
+              style={{ width: "100%", padding: "12px 0", borderRadius: 12, border: "none", fontWeight: 600, fontSize: 14, color: "#fff", background: "linear-gradient(135deg,#f97316,#ea580c)", cursor: parsedAmt <= 0 || !connected || !quote || parsedAmt > fromBalance ? "not-allowed" : "pointer", opacity: parsedAmt <= 0 || !connected || !quote || parsedAmt > fromBalance ? 0.4 : 1, boxShadow: "0 2px 16px rgba(249,115,22,0.3)", fontFamily: "inherit" }}>
               Swap {from} → {to}
             </button>
             <p style={{ fontSize: 11, color: "#5c5672", textAlign: "center", marginTop: 10 }}>via wallet.swap() · AVNU / Ekubo</p>
